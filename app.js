@@ -1798,13 +1798,13 @@ async function toggleCampAds(campId) {
 
   panel.classList.replace('closed','open');
   btn.textContent = '−';
-  cc.innerHTML = `<div class="ai-loading"><div class="ai-spinner"></div><span>Carregando anúncios e criativos...</span></div>`;
+  cc.innerHTML = `<div class="ai-loading"><div class="ai-spinner"></div><span>Carregando criativos...</span></div>`;
 
-  const camp = state.campaigns.find(c => c.id === campId);
+  const camp    = state.campaigns.find(c => c.id === campId);
   const campAds = state.ads
     .filter(a => a.campaignId === campId)
     .sort((a,b) => (b.conversions||0) - (a.conversions||0))
-    .slice(0, 15);  // até 15 anúncios por campanha
+    .slice(0, 15);
 
   // Busca thumbnails reais via Meta API
   const acc = state.accounts.find(a => a.id === camp?.accountId);
@@ -1812,51 +1812,89 @@ async function toggleCampAds(campId) {
     await enrichAdsWithThumbnails(campAds, acc.token);
   }
 
-  const rankColors = ['r1','r2','r3','r4','r5'];
-  const getRankClass = i => i < 5 ? rankColors[i] : '';
+  const rankLabel  = ['#1','#2','#3','#4','#5'];
+  const rankClass  = ['rank-gold','rank-silver','rank-bronze','rank-4','rank-5'];
+  const statusBadge = s => s === 'ACTIVE' || !s
+    ? `<span class="ad-status-badge active">● Ativo</span>`
+    : `<span class="ad-status-badge paused">⏸ Pausado</span>`;
 
-  cc.innerHTML = `<div class="camp-ads-title">
-    🏆 Top ${campAds.length} Anúncios
-    <span style="font-size:11px;color:var(--text3);font-weight:400">— classificados por Resultados · período filtrado</span>
-  </div>`;
+  const emojis = ['🎬','📸','🖼️','📱','🎞️','📢','🎯','✨','🔥','💡','⚡','🌟','🎪','🎨','🎭'];
+
+  cc.innerHTML = `
+    <div class="ad-cards-header">
+      <div class="ad-cards-title">
+        🏆 #1–${campAds.length} melhores criativos
+        <span class="ad-cards-subtitle">— classificados por Resultados</span>
+      </div>
+      <div class="ad-cards-source">Dados: ${camp?.platform === 'meta' ? 'Meta Ads Manager' : (camp?.platform || 'API')}</div>
+    </div>`;
 
   if (!campAds.length) {
     cc.innerHTML += `<div class="no-ads-msg">Nenhum anúncio disponível — sincronize a conta para carregar criativos.</div>`;
     return;
   }
 
-  cc.innerHTML += `<table class="ads-detail-table">
-    <thead><tr>
-      <th>#</th><th style="width:46px">Criativo</th><th>Anúncio</th>
-      <th>Invest.</th><th>Resultados</th><th>Impressões</th>
-      <th>Cliques</th><th>CTR</th><th>CPC</th><th>CPL</th><th>Freq.</th>
-    </tr></thead>
-    <tbody>
-      ${campAds.map((ad,i) => {
-        const ctr  = ad.impressions>0?((ad.clicks/ad.impressions)*100).toFixed(2):'—';
-        const cpc  = ad.clicks>0?(ad.spend/ad.clicks).toFixed(2):'—';
-        const cpl  = (ad.conversions||0)>0?(ad.spend/ad.conversions).toFixed(2):'—';
-        const freq = ad.frequency?ad.frequency.toFixed(1):'—';
-        const emojis = ['🎬','📸','🖼️','📱','🎞️','📢','🎯','✨','🔥','💡','⚡','🌟','🎪','🎨','🎭'];
-        const thumb = ad.thumbUrl
-          ? `<img src="${ad.thumbUrl}" class="creative-thumb" alt="criativo" onerror="this.outerHTML='<div class=\\'creative-thumb-placeholder\\'>${emojis[i%emojis.length]}</div>'">`
-          : `<div class="creative-thumb-placeholder">${emojis[i%emojis.length]}</div>`;
-        return `<tr>
-          <td><span class="ads-rank-badge ${getRankClass(i)}">${i+1}</span></td>
-          <td>${thumb}</td>
-          <td class="ad-name-cell"><strong>${ad.name}</strong></td>
-          <td>${fmt.brl(ad.spend)}</td>
-          <td><strong style="color:var(--green)">${fmt.num(ad.conversions||0)}</strong></td>
-          <td>${fmt.num(ad.impressions)}</td>
-          <td>${fmt.num(ad.clicks)}</td>
-          <td>${ctr!=='—'?ctr+'%':'—'}</td>
-          <td>${cpc!=='—'?'R$'+cpc:'—'}</td>
-          <td>${cpl!=='—'?'R$'+cpl:'—'}</td>
-          <td>${freq}</td>
-        </tr>`;
-      }).join('')}
-    </tbody>
-  </table>`;
+  cc.innerHTML += `<div class="ad-cards-grid">
+    ${campAds.map((ad, i) => {
+      const ctr      = ad.impressions > 0 ? ((ad.clicks/ad.impressions)*100).toFixed(2) : null;
+      const cpc      = ad.clicks > 0 ? (ad.spend/ad.clicks).toFixed(2) : null;
+      const cpl      = (ad.conversions||0) > 0 ? (ad.spend/ad.conversions).toFixed(2) : null;
+      const freq     = ad.frequency ? ad.frequency.toFixed(1) : null;
+      const impr     = ad.impressions ? fmt.num(ad.impressions) : '—';
+      const results  = fmt.num(ad.conversions||0);
+      const cplLabel = cpl ? fmt.brl(parseFloat(cpl)) : '—';
+
+      const thumb = ad.thumbUrl
+        ? `<img src="${ad.thumbUrl}" class="ad-card-thumb" alt="criativo"
+             loading="lazy"
+             onerror="this.parentElement.innerHTML='<div class=\\'ad-card-thumb-placeholder\\'>${emojis[i%emojis.length]}</div>'">`
+        : `<div class="ad-card-thumb-placeholder">${emojis[i%emojis.length]}</div>`;
+
+      const rankBadge = i < 5
+        ? `<div class="ad-card-rank ${rankClass[i]}">${rankLabel[i]}</div>`
+        : `<div class="ad-card-rank rank-other">#${i+1}</div>`;
+
+      return `
+      <div class="ad-card ${i < 3 ? 'ad-card-top' : ''}">
+        <div class="ad-card-img-wrap">
+          ${thumb}
+          ${rankBadge}
+          ${statusBadge(ad.status)}
+        </div>
+        <div class="ad-card-body">
+          <div class="ad-card-name">${ad.name || 'Anúncio ' + (i+1)}</div>
+          <div class="ad-card-sub">${camp?.name || ''}</div>
+
+          <div class="ad-card-metrics">
+            <div class="ad-card-met">
+              <div class="ad-card-met-val green">${results}</div>
+              <div class="ad-card-met-lbl">RESULTADOS</div>
+            </div>
+            <div class="ad-card-met">
+              <div class="ad-card-met-val blue">${ctr ? ctr+'%' : '—'}</div>
+              <div class="ad-card-met-lbl">CTR</div>
+            </div>
+          </div>
+
+          <div class="ad-card-metrics ad-card-metrics-2">
+            <div class="ad-card-met">
+              <div class="ad-card-met-val">${fmt.brl(ad.spend)}</div>
+              <div class="ad-card-met-lbl">GASTO</div>
+            </div>
+            <div class="ad-card-met">
+              <div class="ad-card-met-val">${cpc ? 'R$'+cpc : '—'}</div>
+              <div class="ad-card-met-lbl">CPC</div>
+            </div>
+          </div>
+
+          <div class="ad-card-footer">
+            <span class="ad-card-imp">${impr} imp. ${freq ? '· freq '+freq : ''}</span>
+            <span class="ad-card-cpl ${cpl && parseFloat(cpl) < 50 ? 'cpl-good' : ''}">${cplLabel}/res.</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 // ── Fetch real Meta thumbnails ────────────────────────────────
