@@ -225,8 +225,6 @@ async function syncMetaAccount(account) {
     campData = await fetchMetaAPI(`${accId}/campaigns`, {
       access_token: account.token,
       fields: CAMPAIGN_FIELDS,
-      // FIX: inclui COMPLETED e ARCHIVED para detectar campanhas encerradas
-      effective_status: JSON.stringify(['ACTIVE','PAUSED','COMPLETED','ARCHIVED','WITH_ISSUES']),
       limit: 100
     });
   } catch(e) {
@@ -236,7 +234,6 @@ async function syncMetaAccount(account) {
       campData = await fetchMetaAPI(`${rawId}/campaigns`, {
         access_token: account.token,
         fields: CAMPAIGN_FIELDS,
-        effective_status: JSON.stringify(['ACTIVE','PAUSED','COMPLETED','ARCHIVED','WITH_ISSUES']),
         limit: 100
       });
     } catch(e2) {
