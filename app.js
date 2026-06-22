@@ -893,7 +893,7 @@ function toggleSidebar() { document.getElementById('sidebar').classList.toggle('
 function getFilters() {
   return { account: document.getElementById('fAccount').value, days: getActiveDays() };
 }
-function applyFilters()    { renderDashboard(); }
+function applyFilters()    { renderDashboard(); renderCampaigns(); }
 function getFilteredCampaigns() {
   const f = getFilters();
   return state.campaigns.filter(c => f.account === 'all' || c.accountId === f.account);
@@ -1448,11 +1448,11 @@ function toggleCompare() {
 
 function getCampFilteredCampaigns() {
   let camps = state.campaigns;
+  // Filtro de conta — usa o mesmo seletor do Dashboard (fAccount)
+  const accountId = document.getElementById('fAccount')?.value;
+  if (accountId && accountId !== 'all') camps = camps.filter(c => c.accountId === accountId);
+  // Filtro de plataforma (abas Meta / Google / TikTok)
   if (campPlatformFilter !== 'all') camps = camps.filter(c => c.platform === campPlatformFilter);
-  // Date filter if set
-  const from = document.getElementById('campDateFrom')?.value;
-  const to   = document.getElementById('campDateTo')?.value;
-  // (date filtering would need per-day data; here we filter by lastSync date range if available)
   return camps;
 }
 
