@@ -164,6 +164,25 @@ const META_BASE = 'https://graph.facebook.com';
 const CAMPAIGN_FIELDS = 'id,name,status,objective,daily_budget,lifetime_budget,effective_status,start_time,stop_time';
 const INSIGHT_FIELDS  = 'spend,impressions,clicks,ctr,cpc,cpm,reach,frequency,actions,action_values,website_purchase_roas';
 
+// Tipos de conversão aceitos — em ordem de prioridade.
+// Cobre purchase (e-commerce), lead (formulários/pixel),
+// WhatsApp (messaging_first_reply) e outros objetivos comuns.
+const CONVERSION_TYPES = [
+  'purchase',
+  'offsite_conversion.fb_pixel_purchase',
+  'lead',
+  'offsite_conversion.fb_pixel_lead',
+  'onsite_conversion.messaging_first_reply',
+  'onsite_conversion.messaging_conversation_started_7d',
+  'contact',
+  'complete_registration',
+  'offsite_conversion.fb_pixel_complete_registration'
+];
+const REVENUE_TYPES = [
+  'purchase',
+  'offsite_conversion.fb_pixel_purchase'
+];
+
 // Normaliza o accId: garante que começa com "act_"
 function normalizeAccId(raw) {
   if (!raw) return '';
@@ -276,15 +295,13 @@ async function syncMetaAccount(account) {
       const clicks     = parseInt(ins.clicks || 0);
       const impressions= parseInt(ins.impressions || 0);
 
-      // Tenta purchase primeiro, depois qualquer conversão
-      const conversions = parseInt(
-        actions.find(a => a.action_type === 'purchase')?.value ||
-        actions.find(a => a.action_type === 'offsite_conversion.fb_pixel_purchase')?.value || 0
-      );
-      const revenue = parseFloat(
-        actionVals.find(a => a.action_type === 'purchase')?.value ||
-        actionVals.find(a => a.action_type === 'offsite_conversion.fb_pixel_purchase')?.value || 0
-      );
+      // Busca conversão pelo primeiro tipo disponível (prioridade definida em CONVERSION_TYPES)
+      const convAction = CONVERSION_TYPES.map(t => actions.find(a => a.action_type === t)).find(Boolean);
+      const conversions = parseInt(convAction?.value || 0);
+
+      // Receita: apenas para campanhas de purchase
+      const revAction = REVENUE_TYPES.map(t => actionVals.find(a => a.action_type === t)).find(Boolean);
+      const revenue = parseFloat(revAction?.value || 0);
 
       const obj = {
         id:          `meta_${camp.id}`,
@@ -359,15 +376,17 @@ async function syncMetaAds(campaignId, token) {
         const ins  = insData.data?.[0] || {};
         const avs  = ins.action_values || [];
         const acts = ins.actions || [];
+        const adConvAction = CONVERSION_TYPES.map(t => acts.find(a => a.action_type === t)).find(Boolean);
+        const adRevAction  = REVENUE_TYPES.map(t => avs.find(a => a.action_type === t)).find(Boolean);
         state.ads.push({
           id:           `meta_${ad.id}`,
           campaignId:   `meta_${campaignId}`,
           name:         ad.name,
           spend:        parseFloat(ins.spend || 0),
-          revenue:      parseFloat(avs.find(a=>a.action_type==='purchase')?.value || 0),
+          revenue:      parseFloat(adRevAction?.value || 0),
           clicks:       parseInt(ins.clicks || 0),
           impressions:  parseInt(ins.impressions || 0),
-          conversions:  parseInt(acts.find(a=>a.action_type==='purchase')?.value || 0),
+          conversions:  parseInt(adConvAction?.value || 0),
           source:       'api'
         });
       } catch(e) { /* ad sem dados no período */ }
