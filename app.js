@@ -225,6 +225,8 @@ async function syncMetaAccount(account) {
     campData = await fetchMetaAPI(`${accId}/campaigns`, {
       access_token: account.token,
       fields: CAMPAIGN_FIELDS,
+      // FIX: inclui COMPLETED e ARCHIVED para detectar campanhas encerradas
+      effective_status: JSON.stringify(['ACTIVE','PAUSED','COMPLETED','ARCHIVED','WITH_ISSUES']),
       limit: 100
     });
   } catch(e) {
@@ -234,6 +236,7 @@ async function syncMetaAccount(account) {
       campData = await fetchMetaAPI(`${rawId}/campaigns`, {
         access_token: account.token,
         fields: CAMPAIGN_FIELDS,
+        effective_status: JSON.stringify(['ACTIVE','PAUSED','COMPLETED','ARCHIVED','WITH_ISSUES']),
         limit: 100
       });
     } catch(e2) {
@@ -246,16 +249,22 @@ async function syncMetaAccount(account) {
     return 0;
   }
 
+  // IDs retornados pela API neste sync — usado depois para detectar encerradas
+  const returnedIds = new Set(campData.data.map(c => `meta_${c.id}`));
+
   let synced = 0;
   for (const camp of campData.data) {
     try {
       // ── PASSO 3: Insights da campanha ──
+      // FIX: usa date_preset 'last_30d' para garantir dados reais independente
+      // do filtro de data do dashboard. Usar time_range do dashboard causava
+      // insights zerados em campanhas de períodos anteriores.
       let ins = {};
       try {
         const insights = await fetchMetaAPI(`${camp.id}/insights`, {
           access_token: account.token,
           fields: INSIGHT_FIELDS,
-          time_range: JSON.stringify({ since, until }),
+          date_preset: 'last_30d',
           level: 'campaign'
         });
         ins = insights.data?.[0] || {};
@@ -286,7 +295,11 @@ async function syncMetaAccount(account) {
         name:        camp.name,
         accountId:   account.id,
         objective:   mapMetaObjective(camp.objective),
-        status:      ['ACTIVE','active'].includes(camp.effective_status) ? 'ativa' : 'pausada',
+        status:      ['ACTIVE','active'].includes(camp.effective_status)
+                       ? 'ativa'
+                       : ['COMPLETED','ARCHIVED','DELETED'].includes(camp.effective_status)
+                         ? 'encerrada'
+                         : 'pausada',
         budget:      parseInt(camp.daily_budget || camp.lifetime_budget || 0) / 100,
         spend, revenue, clicks, impressions, conversions,
         reach:       parseInt(ins.reach || 0),
@@ -302,7 +315,7 @@ async function syncMetaAccount(account) {
       else state.campaigns.push(obj);
 
       // Anúncios (não bloqueia se falhar)
-      syncMetaAds(camp.id, account.token, since, until).catch(() => {});
+      syncMetaAds(camp.id, account.token).catch(() => {});
 
       // Busca demographics (gênero + faixa etária) em paralelo
       fetchMetaDemographics(camp.id, account.token, since, until).then(demo => {
@@ -320,10 +333,20 @@ async function syncMetaAccount(account) {
       console.warn('Erro ao processar campanha', camp.name, e.message);
     }
   }
+  // FIX: campanhas locais desta conta que NÃO foram retornadas pela API
+  // (encerradas, arquivadas, deletadas no Meta) → marcar como 'encerrada'
+  state.campaigns.forEach(c => {
+    if (c.accountId === account.id && c.source === 'api' && c.platform === 'meta') {
+      if (!returnedIds.has(c.id) && c.status === 'ativa') {
+        c.status = 'encerrada';
+      }
+    }
+  });
+
   return synced;
 }
 
-async function syncMetaAds(campaignId, token, since, until) {
+async function syncMetaAds(campaignId, token) {
   try {
     const adsData = await fetchMetaAPI(`${campaignId}/ads`, {
       access_token: token, fields: 'id,name,status', limit: 20
@@ -334,7 +357,7 @@ async function syncMetaAds(campaignId, token, since, until) {
       try {
         const insData = await fetchMetaAPI(`${ad.id}/insights`, {
           access_token: token, fields: INSIGHT_FIELDS,
-          time_range: JSON.stringify({ since, until })
+          date_preset: 'last_30d'
         });
         const ins  = insData.data?.[0] || {};
         const avs  = ins.action_values || [];
