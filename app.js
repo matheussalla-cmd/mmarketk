@@ -79,6 +79,8 @@ let state = {
   updateLog: [],
   aiAnalyses: {},
   anthropicKey: '',
+  gSheetsUrl: '',
+  gSheetsLastSync: null,
   charts: {}
 };
 
@@ -1471,6 +1473,24 @@ function renderCampaigns() {
     dateTo.value = new Date().toISOString().split('T')[0];
   }
 
+  // Visão dedicada por plataforma
+  const platView = document.getElementById('campPlatformView');
+  const genView  = document.getElementById('campGenericView');
+  if (campPlatformFilter === 'google') {
+    if (platView) platView.style.display = '';
+    if (genView)  genView.style.display  = 'none';
+    renderGoogleView(getCampFilteredCampaigns());
+    return;
+  } else if (campPlatformFilter === 'meta') {
+    if (platView) platView.style.display = '';
+    if (genView)  genView.style.display  = 'none';
+    renderMetaView(getCampFilteredCampaigns());
+    return;
+  } else {
+    if (platView) platView.style.display = 'none';
+    if (genView)  genView.style.display  = '';
+  }
+
   const camps = getCampFilteredCampaigns();
 
   renderFunnel(camps);
@@ -1752,6 +1772,451 @@ function renderCampInsights(camps) {
 
   document.getElementById('campInsights').innerHTML = insights.slice(0,5).map(i => `
     <div class="camp-insight ${i.type}">
+      <div class="ci-icon">${i.icon}</div>
+      <div><div class="ci-title">${i.title}</div><div class="ci-desc">${i.desc}</div></div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VISÃO DEDICADA — GOOGLE ADS
+// ═══════════════════════════════════════════════════════════════
+function renderGoogleView(camps) {
+  const el = document.getElementById('campPlatformView');
+  if (!el) return;
+
+  const isLight = document.body.classList.contains('light');
+  const gc = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)';
+  const tc = isLight ? '#6b7280' : '#8892a4';
+
+  // ── KPIs ──────────────────────────────────────────────────────
+  const ts   = camps.reduce((s,c) => s + c.spend, 0);
+  const tk   = camps.reduce((s,c) => s + c.clicks, 0);
+  const ti   = camps.reduce((s,c) => s + c.impressions, 0);
+  const tconv= camps.reduce((s,c) => s + (c.conversions || 0), 0);
+  const trev = camps.reduce((s,c) => s + (c.revenue || 0), 0);
+  const avgCtr = ti > 0 ? (tk / ti) * 100 : 0;
+  const avgCpc = tk > 0 ? ts / tk : 0;
+  const cpa    = tconv > 0 ? ts / tconv : 0;
+  const convR  = tk > 0 ? (tconv / tk) * 100 : 0;
+  const avgImprTop = camps.length > 0
+    ? camps.filter(c => c.imprTopPct).reduce((s,c) => s + (c.imprTopPct||0), 0) / camps.filter(c=>c.imprTopPct).length || 0
+    : 0;
+  const ativas = camps.filter(c => c.status === 'ativa').length;
+
+  const kpis = [
+    { icon:'💰', label:'Investimento',   val: fmt.brl(ts),              sub: 'total no período' },
+    { icon:'🖱️', label:'Cliques',        val: fmt.num(tk),              sub: 'cliques totais' },
+    { icon:'👁️', label:'Impressões',     val: fmt.num(ti),              sub: 'impressões totais' },
+    { icon:'📊', label:'CTR Médio',      val: avgCtr.toFixed(2)+'%',    sub: 'taxa de cliques' },
+    { icon:'💵', label:'CPC Médio',      val: fmt.brl(avgCpc),          sub: 'custo por clique' },
+    { icon:'🎯', label:'Conversões',     val: fmt.num(tconv),           sub: 'total de conv.' },
+    { icon:'📈', label:'Taxa de Conv.',  val: convR.toFixed(2)+'%',     sub: 'cliques → conv.' },
+    { icon:'💸', label:'CPA',            val: cpa > 0 ? fmt.brl(cpa) : '—', sub: 'custo / conversão' },
+    { icon:'🏆', label:'Impr. no Topo', val: avgImprTop.toFixed(1)+'%', sub: 'impressões topo' },
+    { icon:'🟢', label:'Ativas',         val: ativas.toString(),        sub: `de ${camps.length} campanhas` }
+  ];
+
+  // ── Agrupa por tipo de campanha (nome heurístico) ────────────
+  const typeMap = {};
+  camps.forEach(c => {
+    const n = c.name.toLowerCase();
+    const type = n.includes('search') || n.includes('pesquisa') ? 'Search'
+               : n.includes('display') ? 'Display'
+               : n.includes('pmax') || n.includes('performance max') ? 'Perf. Max'
+               : n.includes('video') || n.includes('youtube') ? 'Vídeo'
+               : n.includes('shopping') ? 'Shopping'
+               : n.includes('whatsapp') || n.includes('cadastro') || n.includes('alcance') ? 'Leads'
+               : 'Outros';
+    if (!typeMap[type]) typeMap[type] = 0;
+    typeMap[type] += c.spend;
+  });
+
+  // Destroy existing charts
+  ['gv_type','gv_clicks','gv_abs','gv_ctr'].forEach(k => {
+    if (campCharts[k]) { campCharts[k].destroy(); delete campCharts[k]; }
+  });
+
+  el.innerHTML = `
+    <!-- KPIs -->
+    <div class="plat-view-header">
+      <div class="plat-view-title">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg" style="height:20px;vertical-align:middle;margin-right:8px" alt="Google">
+        <span>Google Ads — Visão Completa</span>
+        ${state.gSheetsLastSync ? `<span style="font-size:11px;color:var(--text2);margin-left:12px">Dados via Google Sheets · ${new Date(state.gSheetsLastSync).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:8px">
+        <select class="f-sel" id="gvStatusFilter" onchange="renderGoogleView(getCampFilteredCampaigns())" style="font-size:12px;padding:5px 10px">
+          <option value="all">Todos os status</option>
+          <option value="ativa">Ativas</option>
+          <option value="pausada">Pausadas</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="plat-kpi-grid">
+      ${kpis.map(k => `
+        <div class="plat-kpi-card">
+          <div class="plat-kpi-icon">${k.icon}</div>
+          <div class="plat-kpi-val">${k.val}</div>
+          <div class="plat-kpi-label">${k.label}</div>
+          <div class="plat-kpi-sub">${k.sub}</div>
+        </div>`).join('')}
+    </div>
+
+    <!-- 4 Gráficos -->
+    <div class="plat-charts-grid">
+      <div class="chart-box">
+        <div class="cbox-head"><h4>Gasto por Tipo de Campanha</h4></div>
+        <div style="height:220px"><canvas id="cGvType"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="cbox-head"><h4>Cliques por Campanha (Top 8)</h4></div>
+        <div style="height:220px"><canvas id="cGvClicks"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="cbox-head"><h4>Posição Absoluta no Topo %</h4></div>
+        <div style="height:220px"><canvas id="cGvAbs"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="cbox-head"><h4>CTR por Campanha</h4></div>
+        <div style="height:220px"><canvas id="cGvCtr"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Tabela + CPA Bars -->
+    <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;margin-top:16px">
+      <div class="table-box">
+        <div class="tbox-head">
+          <div><h4>Performance por Campanha</h4><span class="tbox-sub">${camps.length} campanhas</span></div>
+          <input type="search" placeholder="Buscar..." id="gvSearch" oninput="filterGvTable(this.value)" style="width:180px">
+        </div>
+        <div class="table-scroll">
+          <table class="dt" id="gvTable">
+            <thead><tr>
+              <th>Campanha</th><th>Status</th><th>Invest.</th><th>Cliques</th>
+              <th>CTR</th><th>CPC</th><th>Conv.</th><th>CPA</th><th>Topo%</th><th>Score</th>
+            </tr></thead>
+            <tbody id="gvTableBody">
+              ${renderGvTableRows(camps)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="table-box">
+        <div class="tbox-head"><div><h4>💸 CPA — Top 10</h4><span class="tbox-sub">por custo/conv.</span></div></div>
+        <div style="padding:12px 16px">
+          ${renderCpaBars(camps)}
+        </div>
+      </div>
+    </div>
+
+    <!-- Visão Estratégica -->
+    <div class="camp-card-box" style="margin-top:16px">
+      <div class="cbox-head"><h4>🧠 Visão Estratégica — Gestor de Tráfego Google Ads</h4></div>
+      <div class="strat-grid">
+        ${renderGoogleStrategy(camps, ts, tk, ti, tconv, avgCtr, avgCpc, cpa)}
+      </div>
+    </div>`;
+
+  // Renderiza gráficos após DOM existir
+  requestAnimationFrame(() => {
+    // 1. Donut — Gasto por Tipo
+    const c1 = document.getElementById('cGvType')?.getContext('2d');
+    const typeLbls = Object.keys(typeMap);
+    const typeVals = Object.values(typeMap);
+    const typeColors = ['#4a9eff','#f0c040','#3ecf8e','#a78bfa','#f472b6','#2dd4bf','#f87171'];
+    if (c1) campCharts.gv_type = new Chart(c1, {
+      type: 'doughnut',
+      data: { labels: typeLbls, datasets: [{ data: typeVals, backgroundColor: typeColors.slice(0,typeLbls.length), borderWidth: 0, hoverOffset: 6 }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins: { legend:{display:true,position:'bottom',labels:{color:tc,boxWidth:10,padding:8,font:{size:10}}}, tooltip:{callbacks:{label:c=>` R$ ${c.raw.toFixed(2)}`}} } }
+    });
+
+    // 2. Barras — Cliques Top 8
+    const top8 = [...camps].sort((a,b) => b.clicks - a.clicks).slice(0,8);
+    const c2 = document.getElementById('cGvClicks')?.getContext('2d');
+    if (c2) campCharts.gv_clicks = new Chart(c2, {
+      type: 'bar',
+      data: { labels: top8.map(c => c.name.length>22 ? c.name.slice(0,20)+'…' : c.name), datasets: [{ data: top8.map(c=>c.clicks), backgroundColor: 'rgba(74,158,255,0.7)', borderRadius: 5 }] },
+      options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${fmt.num(c.raw)} cliques`}}}, scales:{x:{grid:{color:gc},ticks:{color:tc,callback:v=>fmt.shortNum(v)}},y:{grid:{color:'transparent'},ticks:{color:tc,font:{size:9}}}} }
+    });
+
+    // 3. Barras — Impr. Abs. Top %
+    const topAbs = [...camps].filter(c=>c.imprAbsPct>0).sort((a,b)=>b.imprAbsPct-a.imprAbsPct).slice(0,8);
+    const c3 = document.getElementById('cGvAbs')?.getContext('2d');
+    if (c3) campCharts.gv_abs = new Chart(c3, {
+      type: 'bar',
+      data: { labels: topAbs.map(c => c.name.length>22 ? c.name.slice(0,20)+'…' : c.name), datasets: [{ data: topAbs.map(c=>c.imprAbsPct), backgroundColor: topAbs.map(c => c.imprAbsPct >= 50 ? 'rgba(62,207,142,0.7)' : c.imprAbsPct >= 20 ? 'rgba(240,192,64,0.7)' : 'rgba(248,113,113,0.7)'), borderRadius: 5 }] },
+      options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw.toFixed(1)}% abs. top`}}}, scales:{x:{grid:{color:gc},ticks:{color:tc,callback:v=>v+'%'},max:100},y:{grid:{color:'transparent'},ticks:{color:tc,font:{size:9}}}} }
+    });
+
+    // 4. Barras — CTR semáforo
+    const sortedCtr = [...camps].sort((a,b)=>b.ctr-a.ctr).slice(0,8);
+    const c4 = document.getElementById('cGvCtr')?.getContext('2d');
+    if (c4) campCharts.gv_ctr = new Chart(c4, {
+      type: 'bar',
+      data: { labels: sortedCtr.map(c => c.name.length>22 ? c.name.slice(0,20)+'…' : c.name), datasets: [{ data: sortedCtr.map(c=>+(c.ctr||0).toFixed(2)), backgroundColor: sortedCtr.map(c => (c.ctr||0) >= 5 ? 'rgba(62,207,142,0.75)' : (c.ctr||0) >= 2 ? 'rgba(240,192,64,0.75)' : 'rgba(248,113,113,0.75)'), borderRadius: 5 }] },
+      options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` CTR: ${c.raw}%`}}}, scales:{x:{grid:{color:gc},ticks:{color:tc,callback:v=>v+'%'}},y:{grid:{color:'transparent'},ticks:{color:tc,font:{size:9}}}} }
+    });
+  });
+}
+
+function renderGvTableRows(camps) {
+  const statusFilter = document.getElementById('gvStatusFilter')?.value || 'all';
+  let filtered = camps;
+  if (statusFilter !== 'all') filtered = camps.filter(c => c.status === statusFilter);
+
+  return filtered.map(c => {
+    const ctr  = (c.ctr || 0).toFixed(2);
+    const cpc  = c.clicks > 0 ? fmt.brl(c.spend / c.clicks) : '—';
+    const cpa  = c.conversions > 0 ? fmt.brl(c.spend / c.conversions) : '—';
+    const score = calcGoogleScore(c);
+    const sc   = score >= 70 ? 'good' : score >= 45 ? 'med' : 'bad';
+    return `<tr>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.name}">${c.name}</td>
+      <td><span class="badge ${c.status}">${c.status}</span></td>
+      <td>${fmt.brl(c.spend)}</td>
+      <td>${fmt.num(c.clicks)}</td>
+      <td style="color:${parseFloat(ctr)>=5?'var(--green)':parseFloat(ctr)>=2?'var(--accent)':'var(--red)'}">${ctr}%</td>
+      <td>${cpc}</td>
+      <td><strong>${fmt.num(c.conversions||0)}</strong></td>
+      <td>${cpa}</td>
+      <td>${(c.imprTopPct||0).toFixed(1)}%</td>
+      <td><span class="score-chip ${sc}">${score}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function calcGoogleScore(c) {
+  let s = 0;
+  const ctr = c.ctr || 0;
+  if (ctr >= 8) s += 30; else if (ctr >= 5) s += 22; else if (ctr >= 2) s += 14; else s += 4;
+  const roas = c.spend > 0 ? c.revenue / c.spend : 0;
+  if (roas >= 5) s += 30; else if (roas >= 3) s += 22; else if (roas >= 1) s += 12; else s += 4;
+  if ((c.imprTopPct||0) >= 50) s += 20; else if ((c.imprTopPct||0) >= 20) s += 12; else s += 4;
+  if (c.conversions > 20) s += 20; else if (c.conversions > 5) s += 12; else s += 4;
+  return Math.min(s, 100);
+}
+
+function filterGvTable(q) {
+  document.querySelectorAll('#gvTableBody tr').forEach(r => {
+    r.style.display = r.textContent.toLowerCase().includes(q.toLowerCase()) ? '' : 'none';
+  });
+}
+
+function renderCpaBars(camps) {
+  const withConv = camps.filter(c => c.conversions > 0).sort((a,b) => (a.spend/a.conversions) - (b.spend/b.conversions)).slice(0,10);
+  if (!withConv.length) return '<div style="color:var(--text2);font-size:13px;padding:8px">Nenhuma campanha com conversões.</div>';
+  const maxCpa = Math.max(...withConv.map(c => c.spend / c.conversions));
+  return withConv.map(c => {
+    const cpa = c.spend / c.conversions;
+    const pct = Math.round((cpa / maxCpa) * 100);
+    const color = cpa <= 50 ? 'var(--green)' : cpa <= 150 ? 'var(--accent)' : 'var(--red)';
+    return `<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
+        <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="${c.name}">${c.name}</span>
+        <strong style="color:${color};white-space:nowrap;margin-left:8px">${fmt.brl(cpa)}</strong>
+      </div>
+      <div style="height:6px;background:var(--bg3);border-radius:3px">
+        <div style="height:6px;width:${pct}%;background:${color};border-radius:3px;transition:width .4s"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderGoogleStrategy(camps, ts, tk, ti, tconv, avgCtr, avgCpc, cpa) {
+  const insights = [];
+  const roas = ts > 0 ? camps.reduce((s,c)=>s+(c.revenue||0),0)/ts : 0;
+
+  // CTR benchmark Google Search: ~3-5% é bom
+  if (avgCtr >= 5) insights.push({ type:'tip', icon:'🚀', title:'CTR acima do benchmark', desc:`CTR médio de ${avgCtr.toFixed(2)}% está excelente para Google Ads (benchmark: 3–5%). Campanhas com alta intenção de compra.` });
+  else if (avgCtr < 2) insights.push({ type:'warn', icon:'⚠️', title:'CTR baixo — revisão de anúncios', desc:`CTR de ${avgCtr.toFixed(2)}% abaixo do esperado. Revise títulos, descrições e extensões de anúncios. Teste headlines mais diretas e com palavras-chave no título.` });
+
+  // CPC
+  if (avgCpc > 5) insights.push({ type:'warn', icon:'💸', title:'CPC elevado', desc:`CPC médio de ${fmt.brl(avgCpc)} está alto. Revise lances, qualidade dos anúncios (Quality Score) e correspondência de palavras-chave. Negative keywords podem ajudar.` });
+  else if (avgCpc > 0) insights.push({ type:'tip', icon:'✅', title:'CPC controlado', desc:`CPC de ${fmt.brl(avgCpc)} dentro do esperado. Continue monitorando Quality Score para manter eficiência.` });
+
+  // Conversões e CPA
+  if (tconv === 0 && ts > 0) insights.push({ type:'critical', icon:'🔴', title:'Zero conversões — verifique o pixel', desc:`Investimento de ${fmt.brl(ts)} sem nenhuma conversão registrada. Verifique se a tag de conversão do Google está ativa e disparando corretamente.` });
+  else if (cpa > 200) insights.push({ type:'warn', icon:'💡', title:'CPA elevado — otimize lances', desc:`CPA de ${fmt.brl(cpa)} está alto. Considere estratégia de lances "CPA desejado" ou "Maximizar conversões" para deixar o Google otimizar automaticamente.` });
+
+  // Impr. Top
+  const avgAbsTop = camps.filter(c=>c.imprAbsPct>0).reduce((s,c)=>s+(c.imprAbsPct||0),0) / (camps.filter(c=>c.imprAbsPct>0).length||1);
+  if (avgAbsTop < 20 && avgAbsTop > 0) insights.push({ type:'warn', icon:'📍', title:'Posição absoluta baixa', desc:`Share de posição #1 absoluta em ${avgAbsTop.toFixed(1)}%. Considere aumentar lances ou melhorar o Quality Score para aparecer mais no topo.` });
+  else if (avgAbsTop >= 50) insights.push({ type:'tip', icon:'🏆', title:'Domínio de posição no topo', desc:`${avgAbsTop.toFixed(1)}% das impressões na posição #1 absoluta. Excelente presença competitiva.` });
+
+  // Campanhas pausadas com gasto anterior
+  const pausedWithSpend = camps.filter(c => c.status === 'pausada' && c.spend > 0);
+  if (pausedWithSpend.length > 0) insights.push({ type:'info', icon:'⏸', title:`${pausedWithSpend.length} campanha(s) pausada(s) com histórico`, desc:`Existem ${pausedWithSpend.length} campanhas pausadas que tiveram gasto. Avalie se devem ser reativadas ou se o orçamento deve ser redistribuído.` });
+
+  // ROAS
+  if (roas >= 4) insights.push({ type:'tip', icon:'📈', title:`ROAS de ${roas.toFixed(2)}x — oportunidade de escala`, desc:`Performance financeira forte. Aumente budget das campanhas com melhor CPA mantendo a qualidade do tráfego.` });
+
+  insights.push({ type:'idea', icon:'💡', title:'Estratégia de palavras-chave negativas', desc:'Revise o relatório de termos de pesquisa semanalmente e adicione negativas para eliminar tráfego irrelevante e reduzir CPC.' });
+
+  return insights.slice(0,6).map(i => `
+    <div class="camp-insight ${i.type}">
+      <div class="ci-icon">${i.icon}</div>
+      <div><div class="ci-title">${i.title}</div><div class="ci-desc">${i.desc}</div></div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VISÃO DEDICADA — META ADS
+// ═══════════════════════════════════════════════════════════════
+function renderMetaView(camps) {
+  const el = document.getElementById('campPlatformView');
+  if (!el) return;
+
+  const isLight = document.body.classList.contains('light');
+  const gc = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)';
+  const tc = isLight ? '#6b7280' : '#8892a4';
+
+  const ts    = camps.reduce((s,c) => s + c.spend, 0);
+  const tk    = camps.reduce((s,c) => s + c.clicks, 0);
+  const ti    = camps.reduce((s,c) => s + c.impressions, 0);
+  const tconv = camps.reduce((s,c) => s + (c.conversions||0), 0);
+  const trev  = camps.reduce((s,c) => s + (c.revenue||0), 0);
+  const treach= camps.reduce((s,c) => s + (c.reach||0), 0);
+  const roas  = ts > 0 ? trev / ts : 0;
+  const ctr   = ti > 0 ? (tk/ti)*100 : 0;
+  const cpc   = tk > 0 ? ts/tk : 0;
+  const cpa   = tconv > 0 ? ts/tconv : 0;
+  const freq  = camps.length > 0 ? camps.reduce((s,c)=>s+(c.frequency||0),0)/camps.length : 0;
+  const ativas= camps.filter(c=>c.status==='ativa').length;
+
+  const kpis = [
+    { icon:'💰', label:'Investimento',  val: fmt.brl(ts),             sub:'total no período' },
+    { icon:'📣', label:'Alcance',       val: treach>0?fmt.num(treach):'—', sub:'pessoas únicas' },
+    { icon:'🖱️', label:'Cliques',       val: fmt.num(tk),             sub:'cliques no link' },
+    { icon:'📊', label:'CTR',           val: ctr.toFixed(2)+'%',      sub:'taxa de cliques' },
+    { icon:'💵', label:'CPC',           val: fmt.brl(cpc),            sub:'custo por clique' },
+    { icon:'🎯', label:'Resultados',    val: fmt.num(tconv),          sub:'leads/compras' },
+    { icon:'📈', label:'ROAS',          val: roas.toFixed(2)+'x',     sub:'retorno s/ investimento' },
+    { icon:'💸', label:'CPA',           val: cpa>0?fmt.brl(cpa):'—', sub:'custo / resultado' },
+    { icon:'🔄', label:'Frequência',    val: freq.toFixed(1)+'x',     sub:'impactos/pessoa' },
+    { icon:'🟢', label:'Ativas',        val: ativas.toString(),       sub:`de ${camps.length} campanhas` }
+  ];
+
+  ['gv_mtype','gv_mroas','gv_mctr','gv_mfreq'].forEach(k => {
+    if (campCharts[k]) { campCharts[k].destroy(); delete campCharts[k]; }
+  });
+
+  el.innerHTML = `
+    <div class="plat-view-header">
+      <div class="plat-view-title">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/7/7b/Meta_Platforms_Inc._logo.svg" style="height:18px;vertical-align:middle;margin-right:8px" alt="Meta">
+        <span>Meta Ads — Visão Completa</span>
+      </div>
+    </div>
+
+    <div class="plat-kpi-grid">
+      ${kpis.map(k => `
+        <div class="plat-kpi-card">
+          <div class="plat-kpi-icon">${k.icon}</div>
+          <div class="plat-kpi-val">${k.val}</div>
+          <div class="plat-kpi-label">${k.label}</div>
+          <div class="plat-kpi-sub">${k.sub}</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="plat-charts-grid">
+      <div class="chart-box">
+        <div class="cbox-head"><h4>Gasto por Objetivo</h4></div>
+        <div style="height:220px"><canvas id="cMvType"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="cbox-head"><h4>ROAS por Campanha</h4></div>
+        <div style="height:220px"><canvas id="cMvRoas"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="cbox-head"><h4>CTR por Campanha</h4></div>
+        <div style="height:220px"><canvas id="cMvCtr"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="cbox-head"><h4>Frequência por Campanha</h4></div>
+        <div style="height:220px"><canvas id="cMvFreq"></canvas></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;margin-top:16px">
+      <div class="table-box">
+        <div class="tbox-head">
+          <div><h4>Performance por Campanha</h4><span class="tbox-sub">${camps.length} campanhas</span></div>
+        </div>
+        <div class="table-scroll">
+          <table class="dt">
+            <thead><tr>
+              <th>Campanha</th><th>Status</th><th>Invest.</th><th>Result.</th>
+              <th>CTR</th><th>CPC</th><th>CPA</th><th>ROAS</th><th>Freq.</th><th>Score</th>
+            </tr></thead>
+            <tbody>
+              ${camps.map(c => {
+                const cr = (c.ctr||0).toFixed(2);
+                const cpc2 = c.clicks>0 ? fmt.brl(c.spend/c.clicks) : '—';
+                const cpa2 = c.conversions>0 ? fmt.brl(c.spend/c.conversions) : '—';
+                const r = c.spend>0 ? (c.revenue/c.spend).toFixed(2) : '—';
+                const rc = r!=='—'?(parseFloat(r)>=4?'roas-good':parseFloat(r)>=2.5?'roas-med':'roas-bad'):'';
+                const score = calcScore(c.spend>0?c.revenue/c.spend:0, c.impressions>0?(c.clicks/c.impressions)*100:0, c);
+                const sc = score>=70?'good':score>=45?'med':'bad';
+                return `<tr>
+                  <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.name}">${c.name}</td>
+                  <td><span class="badge ${c.status}">${c.status}</span></td>
+                  <td>${fmt.brl(c.spend)}</td>
+                  <td><strong>${fmt.num(c.conversions||0)}</strong></td>
+                  <td style="color:${parseFloat(cr)>=3?'var(--green)':parseFloat(cr)>=1.5?'var(--accent)':'var(--red)'}">${cr}%</td>
+                  <td>${cpc2}</td>
+                  <td>${cpa2}</td>
+                  <td class="${rc}">${r!=='—'?r+'x':'—'}</td>
+                  <td>${(c.frequency||0).toFixed(1)}</td>
+                  <td><span class="score-chip ${sc}">${score}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="camp-card-box">
+        <div class="cbox-head"><h4>💡 Visão Estratégica Meta</h4></div>
+        <div style="padding:4px 0">${renderMetaStrategy(camps, ts, tconv, roas, ctr, freq)}</div>
+      </div>
+    </div>`;
+
+  requestAnimationFrame(() => {
+    // 1. Donut — Gasto por Objetivo
+    const objMap = {};
+    camps.forEach(c => { const o = c.objective||'outros'; objMap[o] = (objMap[o]||0)+c.spend; });
+    const objLabels = Object.keys(objMap).map(o=>({conversao:'Conversão',trafego:'Tráfego',leads:'Leads',awareness:'Alcance'}[o]||o));
+    const c1 = document.getElementById('cMvType')?.getContext('2d');
+    if (c1) campCharts.gv_mtype = new Chart(c1, { type:'doughnut', data:{ labels:objLabels, datasets:[{ data:Object.values(objMap), backgroundColor:['#4a9eff','#f0c040','#3ecf8e','#a78bfa','#f472b6'], borderWidth:0, hoverOffset:6 }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:true,position:'bottom',labels:{color:tc,boxWidth:10,padding:8,font:{size:10}}}, tooltip:{callbacks:{label:c=>` R$ ${c.raw.toFixed(2)}`}} } } });
+
+    // 2. Barras — ROAS
+    const top8r = [...camps].sort((a,b)=>(b.spend>0?b.revenue/b.spend:0)-(a.spend>0?a.revenue/a.spend:0)).slice(0,8);
+    const c2 = document.getElementById('cMvRoas')?.getContext('2d');
+    if (c2) campCharts.gv_mroas = new Chart(c2, { type:'bar', data:{ labels:top8r.map(c=>c.name.length>20?c.name.slice(0,18)+'…':c.name), datasets:[{ data:top8r.map(c=>c.spend>0?+(c.revenue/c.spend).toFixed(2):0), backgroundColor:top8r.map(c=>{const r=c.spend>0?c.revenue/c.spend:0;return r>=4?'rgba(62,207,142,0.75)':r>=2.5?'rgba(240,192,64,0.75)':'rgba(248,113,113,0.75)';}), borderRadius:5 }] }, options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ROAS: ${c.raw}x`}}}, scales:{x:{grid:{color:gc},ticks:{color:tc}},y:{grid:{color:'transparent'},ticks:{color:tc,font:{size:9}}}} } });
+
+    // 3. CTR
+    const top8c = [...camps].sort((a,b)=>(b.ctr||0)-(a.ctr||0)).slice(0,8);
+    const c3 = document.getElementById('cMvCtr')?.getContext('2d');
+    if (c3) campCharts.gv_mctr = new Chart(c3, { type:'bar', data:{ labels:top8c.map(c=>c.name.length>20?c.name.slice(0,18)+'…':c.name), datasets:[{ data:top8c.map(c=>+(c.ctr||0).toFixed(2)), backgroundColor:top8c.map(c=>(c.ctr||0)>=3?'rgba(62,207,142,0.75)':(c.ctr||0)>=1.5?'rgba(240,192,64,0.75)':'rgba(248,113,113,0.75)'), borderRadius:5 }] }, options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` CTR: ${c.raw}%`}}}, scales:{x:{grid:{color:gc},ticks:{color:tc,callback:v=>v+'%'}},y:{grid:{color:'transparent'},ticks:{color:tc,font:{size:9}}}} } });
+
+    // 4. Frequência
+    const freqCamps = [...camps].filter(c=>c.frequency>0).sort((a,b)=>b.frequency-a.frequency).slice(0,8);
+    const c4 = document.getElementById('cMvFreq')?.getContext('2d');
+    if (c4) campCharts.gv_mfreq = new Chart(c4, { type:'bar', data:{ labels:freqCamps.map(c=>c.name.length>20?c.name.slice(0,18)+'…':c.name), datasets:[{ data:freqCamps.map(c=>+(c.frequency||0).toFixed(1)), backgroundColor:freqCamps.map(c=>(c.frequency||0)>4?'rgba(248,113,113,0.75)':(c.frequency||0)>2.5?'rgba(240,192,64,0.75)':'rgba(74,158,255,0.75)'), borderRadius:5 }] }, options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` Freq: ${c.raw}x`}}}, scales:{x:{grid:{color:gc},ticks:{color:tc}},y:{grid:{color:'transparent'},ticks:{color:tc,font:{size:9}}}} } });
+  });
+}
+
+function renderMetaStrategy(camps, ts, tconv, roas, ctr, freq) {
+  const insights = [];
+  if (roas >= 4) insights.push({ type:'tip', icon:'🚀', title:`ROAS ${roas.toFixed(2)}x — escale agora`, desc:'Performance acima do benchmark. Aumente o budget das campanhas top em 20-30% por vez e monitore o CPM para não saturar o público.' });
+  else if (roas < 1.5 && ts > 0) insights.push({ type:'critical', icon:'🔴', title:'ROAS abaixo do break-even', desc:'Revise criativos, públicos e landing pages. Pause campanhas com ROAS < 1x e redirecione budget para as melhores.' });
+  if (ctr < 1) insights.push({ type:'warn', icon:'🎨', title:'CTR baixo — problema nos criativos', desc:`CTR de ${ctr.toFixed(2)}% indica que os anúncios não estão gerando interesse. Teste hooks diferentes nos primeiros 3 segundos (vídeos) ou na imagem principal.` });
+  if (freq > 4) insights.push({ type:'warn', icon:'🔄', title:'Frequência alta — risco de saturação', desc:`Frequência média de ${freq.toFixed(1)}x. Acima de 3-4x o público começa a ignorar. Renove criativos ou expanda a audiência.` });
+  const freqAlta = camps.filter(c=>(c.frequency||0)>4);
+  if (freqAlta.length) insights.push({ type:'info', icon:'📋', title:`${freqAlta.length} campanha(s) saturando`, desc:`${freqAlta.map(c=>c.name).join(', ')}. Pause, mude os criativos e reative.` });
+  insights.push({ type:'idea', icon:'💡', title:'Lookalike 1% dos convertidos', desc:'Crie um público lookalike 1% baseado nos seus convertidos dos últimos 180 dias para prospecting de alta qualidade.' });
+  return insights.slice(0,5).map(i => `
+    <div class="camp-insight ${i.type}" style="margin-bottom:10px">
       <div class="ci-icon">${i.icon}</div>
       <div><div class="ci-title">${i.title}</div><div class="ci-desc">${i.desc}</div></div>
     </div>`).join('');
@@ -2158,6 +2623,31 @@ function renderAccountsList(){
     </div>
   </div>
 
+  <div class="ai-key-section" style="margin-top:20px">
+    <h4>📊 Google Ads via Google Sheets (sem API)</h4>
+    <p style="color:var(--text2);font-size:13px;margin-bottom:12px">
+      Exporte seus dados do Google Ads usando o add-on nativo do Google Sheets,
+      publique a planilha como CSV público e cole a URL abaixo.<br>
+      <span style="color:var(--text3);font-size:11px">
+        ▶ Planilha → Arquivo → Compartilhar → Publicar na Web → Formato CSV → Copiar link
+      </span>
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="gSheetsUrlInput"
+        placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv"
+        value="${state.gSheetsUrl||''}"
+        style="flex:1;min-width:260px;padding:10px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;font-family:monospace;outline:none">
+      <button class="btn-primary" onclick="saveGSheetsUrl()">Salvar URL</button>
+      <button class="btn-primary" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)" onclick="syncGoogleSheets()">↻ Sincronizar</button>
+    </div>
+    <div style="margin-top:8px;font-size:12px;color:${state.gSheetsUrl?'var(--green)':'var(--text2)'}">
+      ${state.gSheetsUrl
+        ? \`✅ URL configurada · \${state.gSheetsLastSync ? 'Último sync: '+new Date(state.gSheetsLastSync).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : 'Nunca sincronizado'}\`
+        : '⚠️ Cole a URL da planilha pública para importar dados do Google Ads'}
+    </div>
+    <div id="gSheetsStatus" style="margin-top:8px;font-size:12px;display:none"></div>
+  </div>
+
   <div class="ai-key-section">
     <h4>🤖 API Key da Anthropic (para Análise com IA)</h4>
     <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Necessária para usar a página "Análise com IA". Obtenha em <a href="https://console.anthropic.com" target="_blank" style="color:var(--blue)">console.anthropic.com</a> → API Keys → Create Key</p>
@@ -2257,6 +2747,162 @@ function saveAnthropicKey(){
   saveState();
   renderAccountsList();
   showToast(key?'Chave API salva com sucesso!':'Chave removida',key?'success':'info');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  GOOGLE ADS VIA GOOGLE SHEETS (sem API)
+// ═══════════════════════════════════════════════════════════════
+
+function saveGSheetsUrl() {
+  const url = document.getElementById('gSheetsUrlInput')?.value.trim();
+  if (!url) { showToast('Cole a URL da planilha primeiro', 'error'); return; }
+  state.gSheetsUrl = url;
+  saveState();
+  renderAccountsList();
+  showToast('URL salva! Clique em Sincronizar para importar.', 'success');
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  return lines.map(line => {
+    const cols = []; let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cols.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    cols.push(cur);
+    return cols;
+  }).filter(r => r.some(c => c.trim() !== ''));
+}
+
+async function syncGoogleSheets() {
+  const url = state.gSheetsUrl;
+  if (!url) { showToast('Configure a URL da planilha em Contas & Tokens', 'error'); return; }
+
+  const statusEl = document.getElementById('gSheetsStatus');
+  const setStatus = (msg, color) => {
+    if (!statusEl) return;
+    statusEl.style.display = 'block';
+    statusEl.style.color = color || 'var(--text2)';
+    statusEl.textContent = msg;
+  };
+
+  showToast('Importando Google Sheets...', 'info');
+  setStatus('Buscando planilha...');
+
+  let csvText;
+  try {
+    let fetchUrl = url;
+    if (url.includes('/pub?') && !url.includes('output=csv')) {
+      fetchUrl = url + (url.includes('?') ? '&' : '?') + 'output=csv';
+    } else if (url.includes('/edit') || url.includes('/view')) {
+      const id = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1];
+      if (!id) throw new Error('URL invalida - nao foi possivel extrair o ID da planilha.');
+      const gid = url.match(/gid=(\d+)/)?.[1] || '0';
+      fetchUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+    }
+    const res = await fetch(fetchUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status} - verifique se a planilha esta publicada como publica.`);
+    csvText = await res.text();
+  } catch(e) {
+    showToast('Erro ao buscar planilha: ' + e.message, 'error');
+    setStatus('Erro: ' + e.message, 'var(--red)');
+    return;
+  }
+
+  setStatus('Processando dados...');
+  const rows = parseCSV(csvText);
+  if (!rows.length) { showToast('Planilha vazia ou invalida', 'error'); return; }
+
+  // Detecta linha de cabecalho pela coluna "Day"
+  let headerRowIdx = -1, headers = [];
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const dayIdx = rows[i].findIndex(c => c.trim().toLowerCase() === 'day');
+    if (dayIdx !== -1) { headerRowIdx = i; headers = rows[i].map(h => h.trim()); break; }
+  }
+  if (headerRowIdx === -1) {
+    showToast('Cabecalho nao encontrado - a planilha precisa ter uma coluna "Day"', 'error');
+    setStatus('Erro: coluna "Day" nao encontrada.', 'var(--red)');
+    return;
+  }
+
+  const col = name => {
+    return headers.findIndex(h =>
+      h.toLowerCase() === name.toLowerCase() ||
+      h.toLowerCase().replace(/\s+/g,' ').includes(name.toLowerCase())
+    );
+  };
+
+  const iDay=col('Day'), iCamp=col('Campaign'), iStatus=col('Ad status');
+  const iClicks=col('Clicks'), iImpr=col('Impr.'), iCost=col('Cost');
+  const iCtr=col('CTR'), iCpc=col('Avg. CPC');
+  const iConv=col('Conversions'), iConvVal=col('Conv. value');
+  const iImprTop=col('Impr. (Top) %'), iImprAbs=col('Impr. (Abs. Top) %');
+  const iEngage=col('Engagements');
+
+  const campMap = {};
+  const { since, until } = getActiveDateRange();
+
+  for (const row of rows.slice(headerRowIdx + 1)) {
+    if (row.length < 3) continue;
+    const campName = iCamp !== -1 ? row[iCamp]?.trim() : null;
+    if (!campName || campName === '' || campName === 'Total') continue;
+    if (iDay !== -1 && row[iDay]) {
+      try {
+        const d = new Date(row[iDay].trim());
+        if (!isNaN(d)) {
+          const ds = d.toISOString().split('T')[0];
+          if (ds < since || ds > until) continue;
+        }
+      } catch(e) {}
+    }
+    const pf = idx => { if (idx===-1||!row[idx]) return 0; return parseFloat(row[idx].replace(/[^0-9.\-]/g,''))||0; };
+    const pi = idx => Math.round(pf(idx));
+    if (!campMap[campName]) campMap[campName] = { name:campName, status:'ativa', clicks:0, impressions:0, cost:0, conversions:0, convValue:0, engagements:0, imprTop:[], imprAbs:[], ctrArr:[], cpcArr:[] };
+    const c = campMap[campName];
+    if (iStatus!==-1 && row[iStatus]) { const st=row[iStatus].trim().toLowerCase(); c.status=st==='enabled'||st==='ativa'||st==='active'?'ativa':'pausada'; }
+    const impr = pi(iImpr);
+    c.clicks+=pi(iClicks); c.impressions+=impr; c.cost+=pf(iCost);
+    c.conversions+=pf(iConv); c.convValue+=pf(iConvVal); c.engagements+=pi(iEngage);
+    if (impr>0) {
+      if (iCtr!==-1&&row[iCtr]) c.ctrArr.push({v:pf(iCtr),w:impr});
+      if (iImprTop!==-1&&row[iImprTop]) c.imprTop.push({v:pf(iImprTop),w:impr});
+      if (iImprAbs!==-1&&row[iImprAbs]) c.imprAbs.push({v:pf(iImprAbs),w:impr});
+    }
+    if (iCpc!==-1&&row[iCpc]) c.cpcArr.push(pf(iCpc));
+  }
+
+  const wAvg = arr => { if(!arr.length)return 0; const sw=arr.reduce((s,x)=>s+x.w,0); return sw>0?arr.reduce((s,x)=>s+x.v*x.w,0)/sw:0; };
+  state.campaigns = state.campaigns.filter(c => c.source !== 'sheets');
+
+  let synced = 0;
+  for (const [name, c] of Object.entries(campMap)) {
+    const ctr = c.impressions>0?(c.clicks/c.impressions)*100:wAvg(c.ctrArr);
+    const cpc = c.clicks>0?c.cost/c.clicks:(c.cpcArr.length?c.cpcArr.reduce((s,v)=>s+v,0)/c.cpcArr.length:0);
+    state.campaigns.push({
+      id: 'sheets_'+name.replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,''),
+      name, accountId:'sheets', objective:'trafego', status:c.status,
+      budget:0, spend:c.cost, revenue:c.convValue, clicks:c.clicks,
+      impressions:c.impressions, conversions:Math.round(c.conversions),
+      reach:0, frequency:0, ctr:+ctr.toFixed(2), cpc:+cpc.toFixed(2),
+      imprTopPct:+wAvg(c.imprTop).toFixed(2), imprAbsPct:+wAvg(c.imprAbs).toFixed(2),
+      engagements:c.engagements, platform:'google', source:'sheets',
+      lastSync:new Date().toISOString()
+    });
+    synced++;
+  }
+
+  if (!state.accounts.find(a => a.id === 'sheets')) {
+    state.accounts.push({ id:'sheets', name:'Google Ads (Sheets)', platform:'google', token:'', accId:'', active:true, isDemo:false, isSheets:true });
+    renderAccountFilter();
+  }
+
+  state.gSheetsLastSync = new Date().toISOString();
+  saveState(); renderAccountsList(); renderDashboard(); renderCampaigns();
+  showToast(`${synced} campanhas importadas do Google Sheets!`, 'success');
+  setStatus(`${synced} campanhas importadas - ${new Date().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}`, 'var(--green)');
 }
 
 async function syncAccountNow(id){
@@ -2646,7 +3292,6 @@ async function exportPDF() {
     y+=8;
     doc.setFont('helvetica','normal');doc.setFontSize(7);
     camps.forEach((c,ri)=>{
-      if(y>H-10){newPage();y=15;}
       if(ri%2===0){doc.setFillColor(...(isLight?[248,250,255]:[16,20,31]));doc.rect(10,y-3,W-20,8,'F');}
       const roas=c.spend>0?(c.revenue/c.spend).toFixed(2)+'x':'—';
       const ctr=c.impressions>0?((c.clicks/c.impressions)*100).toFixed(2)+'%':'—';

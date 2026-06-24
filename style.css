@@ -861,6 +861,69 @@ body.light .platform-hint code{background:rgba(0,0,0,.06);}
   .login-card{padding:34px 22px;width:95vw;}
 }
 
+/* ══════════════════════════════════════════════════════════════
+   PLATAFORMA VIEWS — Google Ads / Meta Ads visão dedicada
+   ══════════════════════════════════════════════════════════════ */
+
+.plat-view-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px; flex-wrap: wrap; gap: 8px;
+}
+.plat-view-title {
+  font-size: 15px; font-weight: 700; color: var(--text);
+  display: flex; align-items: center;
+}
+
+/* KPI grid — 5 por linha em telas largas */
+.plat-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.plat-kpi-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 12px 10px;
+  text-align: center;
+  transition: var(--trans);
+}
+.plat-kpi-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+.plat-kpi-icon { font-size: 18px; margin-bottom: 5px; }
+.plat-kpi-val  { font-size: 18px; font-weight: 800; color: var(--text); font-family: 'Syne', sans-serif; }
+.plat-kpi-label{ font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 2px; }
+.plat-kpi-sub  { font-size: 10px; color: var(--text3); margin-top: 2px; }
+
+/* 4 gráficos em grid 2x2 */
+.plat-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 0;
+}
+
+/* Score chip na tabela */
+.score-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 20px;
+  font-size: 11px; font-weight: 700;
+}
+.score-chip.good { background: rgba(62,207,142,.15); color: var(--green); }
+.score-chip.med  { background: rgba(240,192,64,.15);  color: var(--accent); }
+.score-chip.bad  { background: rgba(248,113,113,.15); color: var(--red); }
+
+/* Light mode overrides */
+body.light .plat-kpi-card { background: #fff; }
+
+/* Responsive */
+@media(max-width:1100px) {
+  .plat-kpi-grid { grid-template-columns: repeat(3,1fr); }
+  .plat-charts-grid { grid-template-columns: 1fr; }
+}
+@media(max-width:700px) {
+  .plat-kpi-grid { grid-template-columns: repeat(2,1fr); }
+}
+
 /* ── PDF PRINT ── */
 @media print{
   .sidebar,.topbar,.btn-pdf,.btn-pdf-sm,.btn-refresh,.btn-primary,.btn-sm,.expand-btn,.toast-wrap,.modal-overlay{display:none!important;}
