@@ -2642,7 +2642,7 @@ function renderAccountsList(){
     </div>
     <div style="margin-top:8px;font-size:12px;color:${state.gSheetsUrl?'var(--green)':'var(--text2)'}">
       ${state.gSheetsUrl
-        ? \`✅ URL configurada · \${state.gSheetsLastSync ? 'Último sync: '+new Date(state.gSheetsLastSync).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : 'Nunca sincronizado'}\`
+        ? ('✅ URL configurada · ' + (state.gSheetsLastSync ? 'Último sync: '+new Date(state.gSheetsLastSync).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : 'Nunca sincronizado'))
         : '⚠️ Cole a URL da planilha pública para importar dados do Google Ads'}
     </div>
     <div id="gSheetsStatus" style="margin-top:8px;font-size:12px;display:none"></div>
@@ -3292,6 +3292,7 @@ async function exportPDF() {
     y+=8;
     doc.setFont('helvetica','normal');doc.setFontSize(7);
     camps.forEach((c,ri)=>{
+      if(y>H-10){newPage();y=15;}
       if(ri%2===0){doc.setFillColor(...(isLight?[248,250,255]:[16,20,31]));doc.rect(10,y-3,W-20,8,'F');}
       const roas=c.spend>0?(c.revenue/c.spend).toFixed(2)+'x':'—';
       const ctr=c.impressions>0?((c.clicks/c.impressions)*100).toFixed(2)+'%':'—';
